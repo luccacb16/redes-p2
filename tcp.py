@@ -1,5 +1,6 @@
 import asyncio
 from tcputils import *
+import random
 
 
 class Servidor:
@@ -35,6 +36,13 @@ class Servidor:
             # A flag SYN estar setada significa que é um cliente tentando estabelecer uma conexão nova
             # TODO: talvez você precise passar mais coisas para o construtor de conexão
             conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao)
+            
+	    ###TESTE 1###
+	    #Como estamos retornando a informação ao cliente, realizamos make_header e chekcsum junto com o envio de informações com as portas e endereços de destino e fonte)
+            header = make_header(dst_port, src_port, random.randint(1,10000), seq_no+1, FLAGS_SYN | FLAGS_ACK)
+            header = fix_checksum(header, dst_addr, src_addr)
+            conexao.servidor.rede.enviar(header, src_addr)
+            
             # TODO: você precisa fazer o handshake aceitando a conexão. Escolha se você acha melhor
             # fazer aqui mesmo ou dentro da classe Conexao.
             if self.callback:
@@ -54,6 +62,10 @@ class Conexao:
         self.callback = None
         self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
+        
+        #Usados para a operação de make_header
+        #self.seq_no = seq_no
+        #self.ack_no = ack_no
 
     def _exemplo_timer(self):
         # Esta função é só um exemplo e pode ser removida
@@ -78,6 +90,11 @@ class Conexao:
         """
         Usado pela camada de aplicação para enviar dados
         """
+        #Definir certos argumentos
+        #src_addr, src_port, dst_addr, dst_port = self.id_conexao
+        #Criação do cabeçalho para retorno das FLAGS DE SYN E ACK
+        #header = make_header(src_port, dst_port, seq_no, ack_no, FLAGS_SYN|FLAG_ACK)
+        #self.servidor.rede.enviar(header, dst_addr)
         # TODO: implemente aqui o envio de dados.
         # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
         # que você construir para a camada de rede.

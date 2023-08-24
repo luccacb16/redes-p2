@@ -1,6 +1,7 @@
 import asyncio
 from tcputils import *
 import random
+import os
 
 
 class Servidor:
@@ -19,6 +20,10 @@ class Servidor:
         self.callback = callback
 
     def _rdt_rcv(self, src_addr, dst_addr, segment):
+
+        """
+        Recebe as informações da camada de aplicação
+        """
         src_port, dst_port, seq_no, ack_no, \
             flags, window_size, checksum, urg_ptr = read_header(segment)
 
@@ -29,23 +34,20 @@ class Servidor:
         if not self.rede.ignore_checksum and calc_checksum(segment, src_addr, dst_addr) != 0:
             print('descartando segmento com checksum incorreto')
             return
-
         payload = segment[4*(flags>>12):]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             # A flag SYN estar setada significa que é um cliente tentando estabelecer uma conexão nova
             # TODO: talvez você precise passar mais coisas para o construtor de conexão
-            print(f'seq_no = {seq_no}, ack_no = {ack_no}')
             #Torna-se necessário passar a info de qual a próxima informação a ser recebida (seq_no+1)
             conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, seq_no+1)
             
-	    ###TESTE 1###
 	    #Como estamos retornando a informação ao cliente, realizamos make_header e chekcsum junto com o envio de informações com as portas e endereços de destino e fonte)
-            new_sequential_number = random.randint(1,1000)
-            header = make_header(dst_port, src_port, new_sequential_number, seq_no+1, FLAGS_SYN | FLAGS_ACK)
+            header = make_header(dst_port, src_port, conexao.seq_no, conexao.seq_no_esperado, FLAGS_SYN | FLAGS_ACK)
             header = fix_checksum(header, dst_addr, src_addr)
             conexao.servidor.rede.enviar(header, src_addr)
+            conexao.seq_no+=1
             
             # TODO: você precisa fazer o handshake aceitando a conexão. Escolha se você acha melhor
             # fazer aqui mesmo ou dentro da classe Conexao.
@@ -65,11 +67,14 @@ class Conexao:
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
+        self.segmento = None
         self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
         
         #Uso de seq_no+1 para definir qual seria o seq_no_esperado no momento conferir ordem certa ou duplicação de dados
         self.seq_no_esperado = ack_no
+        self.seq_no = random.randint(0, 10000)
+        self.dados_total = []
 
     def _exemplo_timer(self):
         # Esta função é só um exemplo e pode ser removida
@@ -78,22 +83,20 @@ class Conexao:
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
 
-        print(f'seq_no = {seq_no}, self.seq_no_esperado = {self.seq_no_esperado}')
-    	
         #Definir se está na ordem certa ou duplicada
         #conferir se o seq_no passado como parâmetro é igual ao da conexão(está na ordem correta)
-        if seq_no == self.seq_no_esperado:
+        if seq_no == self.seq_no_esperado and len(payload) > 0: #self.seq_no_esperado == ack_no na hora do requisito neste momento
             #Passar para o próximo valor de seq_no_esperado/ack_no
             self.seq_no_esperado += len(payload)
             self.callback(self, payload)
-            # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
-            # Chame self.callback(self, dados) para passar dados para a camada de aplicação após
             # garantir que eles não sejam duplicados e que tenham sido recebidos em ordem.
-            print('recebido payload: %r' % payload)
             #Retornar info para o servidor
-            segmento = make_header(dst_port, src_port, random.randint(1,10000), self.seq_no_esperado, FLAGS_ACK)
+            segmento = make_header(dst_port, src_port, self.seq_no, self.seq_no_esperado, FLAGS_ACK)
             segmento = fix_checksum(segmento, dst_addr, src_addr)
+            self.segmento = segmento
+
             self.servidor.rede.enviar(segmento, src_addr)
+
 
     # Os métodos abaixo fazem parte da API
 
@@ -108,11 +111,20 @@ class Conexao:
         """
         Usado pela camada de aplicação para enviar dados
         """
-        #Definir certos argumentos
-        #src_addr, src_port, dst_addr, dst_port = self.id_conexao
-        #Criação do cabeçalho para retorno das FLAGS DE SYN E ACK
-        #header = make_header(src_port, dst_port, seq_no, ack_no, FLAGS_SYN|FLAG_ACK)
-        #self.servidor.rede.enviar(header, dst_addr)
+        
+        #Dados = payload
+        self.dados_total.append(dados)
+        while len(dados) > 0:
+            payload = dados[:MSS]
+            #print('payload: ', payload)      
+            dados = dados[MSS:]
+            #print('dados: ',dados)
+            src_addr, src_port, dst_addr, dst_port = self.id_conexao
+            segmento = make_header(dst_port, src_port, self.seq_no, self.seq_no_esperado, FLAGS_ACK)
+            segmento = fix_checksum(segmento+payload, dst_addr, src_addr)
+            self.servidor.rede.enviar(segmento, src_addr)
+        
+            self.seq_no += len(payload)
         # TODO: implemente aqui o envio de dados.
         # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
         # que você construir para a camada de rede.

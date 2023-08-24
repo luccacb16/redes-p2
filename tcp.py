@@ -41,29 +41,47 @@ class Servidor:
             # A flag SYN estar setada significa que é um cliente tentando estabelecer uma conexão nova
             # TODO: talvez você precise passar mais coisas para o construtor de conexão
             #Torna-se necessário passar a info de qual a próxima informação a ser recebida (seq_no+1)
-            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, seq_no+1)
+            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, seq_no, seq_no+1)
+           
             
 	    #Como estamos retornando a informação ao cliente, realizamos make_header e chekcsum junto com o envio de informações com as portas e endereços de destino e fonte)
             header = make_header(dst_port, src_port, conexao.seq_no, conexao.seq_no_esperado, FLAGS_SYN | FLAGS_ACK)
+            
             header = fix_checksum(header, dst_addr, src_addr)
+            
             conexao.servidor.rede.enviar(header, src_addr)
+           
             conexao.seq_no+=1
             
             # TODO: você precisa fazer o handshake aceitando a conexão. Escolha se você acha melhor
             # fazer aqui mesmo ou dentro da classe Conexao.
             if self.callback:
                 self.callback(conexao)
+
+            
         elif id_conexao in self.conexoes:
             # Passa para a conexão adequada se ela já estiver estabelecida
             #Realiza uma atualização dos valores seq_no e ack_no
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
+            if (flags & FLAGS_FIN) == FLAGS_FIN:
+                #Conexão já está estabelecida, portanto basta acessá-la na lista de classes conexões
+                #Realizando o callback
+                conexao = self.conexoes[id_conexao]
+                conexao.callback(conexao, b'')
+                #Retornando um aknowledge para definir que foi fechada a conexão
+             
+                segmento = make_header(dst_port, src_port, conexao.seq_no, conexao.seq_no_esperado, FLAGS_FIN|FLAGS_ACK)
+                segmento = fix_checksum(segmento, dst_addr, src_addr)
+                conexao.servidor.rede.enviar(segmento, src_addr)
+                del conexao.servidor.conexoes[conexao.id_conexao]
+                
         else:
             print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
                   (src_addr, src_port, dst_addr, dst_port))
 
 
 class Conexao:
-    def __init__(self, servidor, id_conexao, ack_no):
+    def __init__(self, servidor, id_conexao, seq_no, ack_no):
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
@@ -73,7 +91,7 @@ class Conexao:
         
         #Uso de seq_no+1 para definir qual seria o seq_no_esperado no momento conferir ordem certa ou duplicação de dados
         self.seq_no_esperado = ack_no
-        self.seq_no = random.randint(0, 10000)
+        self.seq_no = seq_no
         self.dados_total = []
 
     def _exemplo_timer(self):
@@ -83,9 +101,13 @@ class Conexao:
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
 
+        if (flags & FLAGS_FIN | FLAGS_ACK) == FLAGS_FIN|FLAGS_ACK:
+            self.seq_no_esperado += 1
+
         #Definir se está na ordem certa ou duplicada
         #conferir se o seq_no passado como parâmetro é igual ao da conexão(está na ordem correta)
-        if seq_no == self.seq_no_esperado and len(payload) > 0: #self.seq_no_esperado == ack_no na hora do requisito neste momento
+        elif seq_no == self.seq_no_esperado and len(payload) > 0: #self.seq_no_esperado == ack_no na hora do requisito neste momento
+            print('saiu')
             #Passar para o próximo valor de seq_no_esperado/ack_no
             self.seq_no_esperado += len(payload)
             self.callback(self, payload)
@@ -135,4 +157,11 @@ class Conexao:
         Usado pela camada de aplicação para fechar a conexão
         """
         # TODO: implemente aqui o fechamento de conexão
-        pass
+        #Definição do segmento
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+        #Queremos enviar uma resposta para a classe rede
+        segmento = make_header(dst_port, src_port, self.seq_no, self.seq_no_esperado, FLAGS_FIN)
+        segmento = fix_checksum(segmento, dst_addr, src_addr)
+        self.servidor.rede.enviar(segmento, src_addr)
+
+        self.seq_no+=1
